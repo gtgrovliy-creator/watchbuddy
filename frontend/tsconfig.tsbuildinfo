@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/pages/landingpage.tsx","./src/pages/roompage.tsx","./src/services/socket.ts","./src/services/telegram.ts","./src/services/videoutils.ts"],"version":"5.9.3"}

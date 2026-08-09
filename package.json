@@ -1,0 +1,20 @@
+{
+  "name": "watchbuddy-telegram",
+  "version": "1.0.0",
+  "description": "Telegram Mini App for watching YouTube videos together with friends",
+  "main": "backend/server.js",
+  "scripts": {
+    "install:all": "npm install && npm install --prefix backend && npm install --prefix frontend",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "npm run dev --prefix backend",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "build": "npm run build --prefix frontend",
+    "start": "node backend/server.js"
+  },
+  "keywords": ["telegram", "mini-app", "youtube", "watch-together", "socket.io"],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
