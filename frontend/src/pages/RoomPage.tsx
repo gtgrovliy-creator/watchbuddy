@@ -45,6 +45,14 @@ interface ChatMessage {
   text: string;
   timestamp: string;
   role: string;
+  socketId?: string;
+  replyToId?: string | null;
+  replyToText?: string | null;
+  replyToSender?: string | null;
+}
+
+interface ReactionMap {
+  [emoji: string]: string[];
 }
 
 export default function RoomPage() {
@@ -66,7 +74,14 @@ export default function RoomPage() {
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputMessage, setInputMessage] = useState('');
+  const [replyTo, setReplyTo] = useState<{ id: string; sender: string; text: string } | null>(null);
+  const [reactions, setReactions] = useState<Record<string, ReactionMap>>({});
+  const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null);
+  const [reactionPickerRect, setReactionPickerRect] = useState<{ top: number; left: number; isMine: boolean } | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressMsgRef = useRef<string | null>(null);
 
   const playerRef = useRef<YouTubePlayer | null>(null);
   const htmlVideoRef = useRef<HTMLVideoElement>(null);
@@ -138,8 +153,22 @@ export default function RoomPage() {
     });
 
     socket.on('new_message', (msg: ChatMessage) => {
-      setMessages(prev => [...prev, msg]);
+      setMessages(prev => {
+        if (prev.some(m => m.id === msg.id)) return prev;
+        return [...prev, msg];
+      });
       hapticFeedback('light');
+    });
+
+    socket.on('ALL_REACTIONS', ({ reactions: allReactions }: { reactions: Record<string, ReactionMap> }) => {
+      setReactions(allReactions);
+    });
+
+    socket.on('message-reaction-updated', ({ messageId, reactions: msgReactions }: { messageId: string; reactions: ReactionMap }) => {
+      setReactions(prev => ({
+        ...prev,
+        [messageId]: msgReactions
+      }));
     });
 
     socket.on('error', (msg) => showAlert(msg));
@@ -151,6 +180,8 @@ export default function RoomPage() {
       socket.off('user_left');
       socket.off('sync_state');
       socket.off('new_message');
+      socket.off('ALL_REACTIONS');
+      socket.off('message-reaction-updated');
       socket.off('error');
     };
   }, [roomId, username]);
@@ -158,6 +189,20 @@ export default function RoomPage() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  useEffect(() => {
+    const handleClickOutside = () => {
+      if (reactionPickerMsgId) {
+        setReactionPickerMsgId(null);
+        setReactionPickerRect(null);
+      }
+    };
+
+    if (reactionPickerMsgId) {
+      document.addEventListener('click', handleClickOutside);
+      return () => document.removeEventListener('click', handleClickOutside);
+    }
+  }, [reactionPickerMsgId]);
 
   const applyHtmlVideoState = () => {
     if (!htmlVideoRef.current || !targetState.current) return;
@@ -253,9 +298,61 @@ export default function RoomPage() {
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputMessage.trim()) return;
-    socket.emit('send_message', { roomId, message: inputMessage });
+    socket.emit('send_message', {
+      roomId,
+      message: inputMessage,
+      replyToId: replyTo?.id || null,
+      replyToText: replyTo?.text || null,
+      replyToSender: replyTo?.sender || null
+    });
     setInputMessage('');
+    setReplyTo(null);
     hapticFeedback('light');
+  };
+
+  const cancelReply = () => setReplyTo(null);
+
+  const sendReaction = (messageId: string, emoji: string) => {
+    socket.emit('send-message-reaction', { roomId, messageId, emoji, sender: username });
+    setReactionPickerMsgId(null);
+  };
+
+  const handleReactionPickerToggle = (messageId: string) => {
+    if (reactionPickerMsgId === messageId) {
+      setReactionPickerMsgId(null);
+      setReactionPickerRect(null);
+      return;
+    }
+
+    const msgEl = document.querySelector(`[data-message-id="${messageId}"]`);
+    if (!msgEl) return;
+
+    const rect = msgEl.getBoundingClientRect();
+    const isMine = msgEl.classList.contains('outgoing') || msgEl.closest('.items-end') !== null;
+
+    setReactionPickerRect({
+      top: rect.top - 44,
+      left: rect.left,
+      isMine: !!isMine
+    });
+    setReactionPickerMsgId(messageId);
+    hapticFeedback('light');
+  };
+
+  const handleReplyToMessage = (msg: ChatMessage) => {
+    setReplyTo({ id: msg.id, sender: msg.username, text: msg.text });
+    hapticFeedback('medium');
+  };
+
+  const getReactionsForMessage = (messageId: string): ReactionMap => {
+    return reactions[messageId] || {};
+  };
+
+  const getMyReactionsForMessage = (messageId: string): string[] => {
+    const msgReactions = reactions[messageId] || {};
+    return Object.entries(msgReactions)
+      .filter(([, userIds]) => userIds.includes(socket.id || ''))
+      .map(([emoji]) => emoji);
   };
 
   const playVideo = (vId: string) => {
@@ -425,14 +522,14 @@ export default function RoomPage() {
   };
 
   return (
-    <div className="min-h-screen bg-bg-light text-text-main font-sans flex flex-col selection:bg-primary/20">
-      <nav className="h-14 bg-white border-b border-[#A89F94]/10 px-4 flex items-center justify-between sticky top-0 z-30 shadow-sm">
+    <div className="h-screen bg-[#17212b] text-[#f5f5f5] font-sans flex flex-col selection:bg-primary/20 overflow-hidden">
+      <nav className="h-14 bg-[rgba(23,33,43,0.97)] backdrop-blur-xl border-b border-white/5 px-4 flex items-center justify-between sticky top-0 z-30">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/')} className="p-2 hover:bg-bg-light rounded-xl transition-colors">
-            <ArrowLeft className="w-5 h-5 text-text-muted" />
+          <button onClick={() => navigate('/')} className="p-2 hover:bg-white/5 rounded-xl transition-colors">
+            <ArrowLeft className="w-5 h-5 text-[#708499]" />
           </button>
           <div className="flex items-center gap-2">
-            <span className="font-bold text-lg tracking-tight text-primary">WatchBuddy</span>
+            <span className="font-bold text-lg tracking-tight text-[#5288c1]">WatchBuddy</span>
           </div>
         </div>
 
@@ -443,21 +540,21 @@ export default function RoomPage() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search..."
-              className="w-full pl-3 pr-8 py-1.5 bg-bg-light rounded-xl text-xs border-none focus:ring-2 focus:ring-primary/20 transition-all"
+              className="w-full pl-3 pr-8 py-1.5 bg-[#232e3c] rounded-xl text-xs border border-white/5 focus:ring-2 focus:ring-[#5288c1]/20 transition-all text-white placeholder:text-[#708499]"
             />
-            <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-primary transition-colors">
+            <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 text-[#708499] hover:text-[#5288c1] transition-colors">
               <Search className="w-3.5 h-3.5" />
             </button>
           </form>
-          <button onClick={() => setIsSearching(true)} className="sm:hidden p-2 hover:bg-bg-light rounded-xl transition-colors">
-            <Search className="w-4 h-4 text-text-muted" />
+          <button onClick={() => setIsSearching(true)} className="sm:hidden p-2 hover:bg-white/5 rounded-xl transition-colors">
+            <Search className="w-4 h-4 text-[#708499]" />
           </button>
-          <div className="flex items-center gap-1.5 bg-bg-light px-3 py-1.5 rounded-full">
-            <Tv className="w-3.5 h-3.5 text-text-muted" />
-            <span className="text-xs font-bold text-text-muted">{roomId}</span>
+          <div className="flex items-center gap-1.5 bg-[#232e3c] px-3 py-1.5 rounded-full border border-white/5">
+            <Tv className="w-3.5 h-3.5 text-[#708499]" />
+            <span className="text-xs font-bold text-[#708499]">{roomId}</span>
           </div>
         </div>
-        <div className="w-8 h-8 rounded-full overflow-hidden border-2 border-white shadow-sm ring-1 ring-[#A89F94]/20 shrink-0">
+        <div className="w-8 h-8 rounded-full overflow-hidden border-2 border-white/10 shadow-sm ring-1 ring-white/5 shrink-0">
           <img src={`https://api.dicebear.com/7.x/initials/svg?seed=${username}`} alt="avatar" className="w-full h-full" />
         </div>
       </nav>
@@ -602,124 +699,224 @@ export default function RoomPage() {
                 <Search className="w-3.5 h-3.5" /> Browse
               </button>
             </div>
-          </div>
+           </div>
 
-          <div className="grid grid-cols-3 gap-3">
-            <div className="bg-white p-4 rounded-2xl border border-[#A89F94]/10 shadow-sm space-y-2">
-              <p className="text-[9px] font-black uppercase tracking-[0.15em] text-text-muted">Status</p>
-              <div className="text-lg font-bold tracking-tight">Active</div>
-              <p className="text-[9px] font-bold text-accent-green uppercase">Syncing</p>
-            </div>
-            <div className="bg-white p-4 rounded-2xl border border-[#A89F94]/10 shadow-sm space-y-2">
-              <p className="text-[9px] font-black uppercase tracking-[0.15em] text-text-muted">People</p>
-              <div className="text-lg font-bold tracking-tight">{users.length}</div>
-              <p className="text-[9px] font-bold text-text-muted uppercase">In room</p>
-            </div>
-            <div className="bg-white p-4 rounded-2xl border border-[#A89F94]/10 shadow-sm space-y-2">
-              <p className="text-[9px] font-black uppercase tracking-[0.15em] text-text-muted">Access</p>
-              <div className="text-lg font-bold tracking-tight truncate">{myRole}</div>
-              <p className="text-[9px] font-bold text-text-muted uppercase">Role</p>
-            </div>
-          </div>
-        </div>
+           <div className="grid grid-cols-3 gap-3">
+             <div className="bg-[#232e3c] p-4 rounded-2xl border border-white/5 shadow-sm space-y-2">
+               <p className="text-[9px] font-black uppercase tracking-[0.15em] text-[#708499]">Status</p>
+               <div className="text-lg font-bold tracking-tight text-white">Active</div>
+               <p className="text-[9px] font-bold text-[#8bc34a] uppercase">Syncing</p>
+             </div>
+             <div className="bg-[#232e3c] p-4 rounded-2xl border border-white/5 shadow-sm space-y-2">
+               <p className="text-[9px] font-black uppercase tracking-[0.15em] text-[#708499]">People</p>
+               <div className="text-lg font-bold tracking-tight text-white">{users.length}</div>
+               <p className="text-[9px] font-bold text-[#708499] uppercase">In room</p>
+             </div>
+             <div className="bg-[#232e3c] p-4 rounded-2xl border border-white/5 shadow-sm space-y-2">
+               <p className="text-[9px] font-black uppercase tracking-[0.15em] text-[#708499]">Access</p>
+               <div className="text-lg font-bold tracking-tight text-white truncate">{myRole}</div>
+               <p className="text-[9px] font-bold text-[#708499] uppercase">Role</p>
+             </div>
+           </div>
+         </div>
 
-        <aside className="w-full md:w-80 bg-white border-t md:border-t-0 md:border-l border-[#A89F94]/10 flex flex-col md:max-h-full max-h-[45vh]">
-          <div className="p-4 border-b border-[#A89F94]/10 flex items-center justify-between">
-            <div>
-              <h3 className="font-bold text-base text-primary">Room Dashboard</h3>
-              <p className="text-xs text-text-muted font-medium flex items-center gap-2">
-                {username} <div className="w-1.5 h-1.5 rounded-full bg-accent-green" />
-              </p>
-            </div>
-            <button onClick={copyRoomLink} className="p-2.5 bg-primary text-white rounded-xl hover:bg-primary-dark transition-all active:scale-95 shadow-lg shadow-primary/20">
-              {copied ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
-            </button>
-          </div>
+         <aside className="w-full md:w-80 bg-[#232e3c] border-t md:border-t-0 md:border-l border-white/5 flex flex-col md:max-h-full max-h-[45vh]">
+           <div className="p-4 border-b border-white/5 flex items-center justify-between">
+             <div>
+               <h3 className="font-bold text-base text-[#5288c1]">Room Dashboard</h3>
+               <p className="text-xs text-[#708499] font-medium flex items-center gap-2">
+                 {username} <div className="w-1.5 h-1.5 rounded-full bg-[#8bc34a]" />
+               </p>
+             </div>
+             <button onClick={copyRoomLink} className="p-2.5 bg-[#5288c1] text-white rounded-xl hover:bg-[#4a7ab0] transition-all active:scale-95 shadow-lg shadow-[#5288c1]/20">
+               {copied ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
+             </button>
+           </div>
 
-          <div className="flex p-1.5 gap-1.5 bg-bg-light/50 mx-4 mt-3 rounded-xl border border-[#A89F94]/5">
-            <button onClick={() => setActiveTab('chat')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${activeTab === 'chat' ? 'bg-white text-primary shadow-sm' : 'text-text-muted hover:text-text-main'}`}>Chat</button>
-            <button onClick={() => setActiveTab('participants')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${activeTab === 'participants' ? 'bg-white text-primary shadow-sm' : 'text-text-muted hover:text-text-main'}`}>People</button>
-          </div>
+           <div className="flex p-1.5 gap-1.5 bg-[#17212b]/50 mx-4 mt-3 rounded-xl border border-white/5">
+             <button onClick={() => setActiveTab('chat')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${activeTab === 'chat' ? 'bg-[#232e3c] text-[#5288c1] shadow-sm' : 'text-[#708499] hover:text-white'}`}>Chat</button>
+             <button onClick={() => setActiveTab('participants')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${activeTab === 'participants' ? 'bg-[#232e3c] text-[#5288c1] shadow-sm' : 'text-[#708499] hover:text-white'}`}>People</button>
+           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 flex flex-col min-h-0">
-            {activeTab === 'participants' ? (
-              <div className="space-y-3">
-                {users.map(user => (
-                  <div key={user.socketId} className="flex items-center gap-3 p-2.5 hover:bg-bg-light rounded-xl transition-colors group">
-                    <div className="w-9 h-9 rounded-xl bg-white border border-[#A89F94]/10 flex items-center justify-center group-hover:scale-110 transition-transform shadow-sm">
-                      {user.role === 'Host' ? <Crown className="w-4 h-4 text-primary" /> : <UserIcon className="w-4 h-4 text-text-muted" />}
-                    </div>
-                    <div className="min-w-0">
-                      <span className="block text-sm font-bold truncate">{user.username} {user.socketId === socket.id && '(You)'}</span>
-                      <span className="text-[9px] font-black uppercase tracking-widest text-text-muted">{user.role}</span>
-                    </div>
-                    {myRole === 'Host' && user.socketId !== socket.id && user.role !== 'Host' && (
-                      <button
-                        onClick={() => handlePromote(user.socketId)}
-                        className="ml-auto p-2 text-primary hover:bg-primary/10 rounded-lg transition-colors"
-                        title="Promote to Host"
-                      >
-                        <Shield className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="flex-1 flex flex-col min-h-0">
-                <div className="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar">
-                  {messages.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-center p-4 text-text-muted">
-                      <MessageSquare className="w-10 h-10 opacity-10 mb-3" />
-                      <p className="text-sm font-medium italic">No messages yet. Say hi!</p>
-                    </div>
-                  ) : (
-                    messages.map((msg) => (
-                      <div key={msg.id} className={`flex flex-col ${msg.username === username ? 'items-end' : 'items-start'}`}>
-                        <div className="flex items-center gap-2 mb-0.5 px-1">
-                          <span className="text-[10px] font-bold text-text-muted">{msg.username}</span>
-                          <span className="text-[9px] text-text-muted/60">{msg.timestamp}</span>
+           <div className="flex-1 overflow-y-auto p-4 flex flex-col min-h-0">
+             {activeTab === 'participants' ? (
+               <div className="space-y-3">
+                 {users.map(user => (
+                   <div key={user.socketId} className="flex items-center gap-3 p-2.5 hover:bg-white/5 rounded-xl transition-colors group">
+                     <div className="w-9 h-9 rounded-xl bg-[#17212b] border border-white/10 flex items-center justify-center group-hover:scale-110 transition-transform shadow-sm">
+                       {user.role === 'Host' ? <Crown className="w-4 h-4 text-[#5288c1]" /> : <UserIcon className="w-4 h-4 text-[#708499]" />}
+                     </div>
+                     <div className="min-w-0">
+                       <span className="block text-sm font-bold truncate text-white">{user.username} {user.socketId === socket.id && '(You)'}</span>
+                       <span className="text-[9px] font-black uppercase tracking-widest text-[#708499]">{user.role}</span>
+                     </div>
+                     {myRole === 'Host' && user.socketId !== socket.id && user.role !== 'Host' && (
+                       <button
+                         onClick={() => handlePromote(user.socketId)}
+                         className="ml-auto p-2 text-[#5288c1] hover:bg-white/5 rounded-lg transition-colors"
+                         title="Promote to Host"
+                       >
+                         <Shield className="w-4 h-4" />
+                       </button>
+                     )}
+                   </div>
+                 ))}
+               </div>
+             ) : (
+               <div className="flex-1 flex flex-col min-h-0">
+                 <div className="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar">
+                   {messages.length === 0 ? (
+                     <div className="h-full flex flex-col items-center justify-center text-center p-4 text-[#708499]">
+                       <MessageSquare className="w-10 h-10 opacity-10 mb-3" />
+                       <p className="text-sm font-medium italic">No messages yet. Say hi!</p>
+                     </div>
+                   ) : (
+                    messages.map((msg) => {
+                      const isMine = msg.username === username;
+                      const msgReactions = getReactionsForMessage(msg.id);
+                      const myReactions = getMyReactionsForMessage(msg.id);
+
+                      return (
+                        <div
+                          key={msg.id}
+                          className={`flex flex-col ${isMine ? 'items-end' : 'items-start'} group`}
+                          onTouchStart={() => {
+                            longPressMsgRef.current = msg.id;
+                            longPressTimerRef.current = window.setTimeout(() => {
+                              handleReactionPickerToggle(msg.id);
+                              longPressMsgRef.current = null;
+                            }, 400);
+                          }}
+                          onTouchMove={() => {
+                            if (longPressTimerRef.current) {
+                              clearTimeout(longPressTimerRef.current);
+                              longPressTimerRef.current = null;
+                            }
+                          }}
+                          onTouchEnd={() => {
+                            if (longPressTimerRef.current) {
+                              clearTimeout(longPressTimerRef.current);
+                              longPressTimerRef.current = null;
+                            }
+                          }}
+                          onDoubleClick={() => handleReactionPickerToggle(msg.id)}
+                        >
+                          <div className="flex items-center gap-2 mb-0.5 px-1">
+                            <span className="text-[10px] font-bold text-text-muted">{msg.username}</span>
+                            <span className="text-[9px] text-text-muted/60">{msg.timestamp}</span>
+                          </div>
+
+                          <div
+                            className={`px-3.5 py-2 rounded-2xl text-sm max-w-[85%] shadow-sm relative ${
+                              isMine
+                                ? 'bg-[#2b5278] text-white rounded-tr-none'
+                                : 'bg-[#182533] text-white rounded-tl-none'
+                            }`}
+                          >
+                            {msg.replyToId && msg.replyToText && (
+                              <div className="border-l-2 border-[#64b5ef] pl-2 mb-1.5 bg-white/5 rounded-r-md">
+                                <span className="text-[11px] font-semibold text-[#64b5ef] block">{msg.replyToSender}</span>
+                                <span className="text-[11px] text-white/70 line-clamp-1 block">{msg.replyToText.slice(0, 50)}</span>
+                              </div>
+                            )}
+                            <span className="text-[13px] leading-relaxed">{msg.text}</span>
+                          </div>
+
+                          {Object.keys(msgReactions).length > 0 && (
+                            <div className={`flex flex-wrap gap-1 mt-1 ${isMine ? 'justify-end' : 'justify-start'}`}>
+                              {Object.entries(msgReactions).map(([emoji, userIds]) => (
+                                <button
+                                  key={emoji}
+                                  onClick={() => sendReaction(msg.id, emoji)}
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-all ${
+                                    myReactions.includes(emoji)
+                                      ? 'bg-white/15 border-white/25'
+                                      : 'bg-white/5 border-white/10'
+                                  }`}
+                                >
+                                  <span>{emoji}</span>
+                                  <span className="text-[10px] font-semibold text-white/80">{userIds.length}</span>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+
+                          {reactionPickerMsgId === msg.id && reactionPickerRect && (
+                            <div
+                              className="fixed z-50 bg-[#1e2c3a] border border-white/15 rounded-full px-2 py-1.5 shadow-xl flex items-center gap-1"
+                              style={{
+                                top: `${reactionPickerRect.top}px`,
+                                [reactionPickerRect.isMine ? 'right' : 'left']: reactionPickerRect.isMine ? 'auto' : `${reactionPickerRect.left}px`,
+                                ...(reactionPickerRect.isMine ? { right: `${window.innerWidth - reactionPickerRect.left}px` } : {})
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {['❤️', '💖', '😂', '🔥', '👍', '😮', '😢', '👏'].map(emoji => (
+                                <button
+                                  key={emoji}
+                                  onClick={() => sendReaction(msg.id, emoji)}
+                                  className="text-lg hover:scale-125 transition-transform active:scale-90"
+                                >
+                                  {emoji}
+                                </button>
+                              ))}
+                              <button
+                                onClick={() => handleReplyToMessage(msg)}
+                                className="text-[10px] text-[#64b5ef] hover:text-white transition-colors px-2 font-semibold"
+                              >
+                                Reply
+                              </button>
+                            </div>
+                          )}
                         </div>
-                        <div className={`px-3.5 py-2 rounded-2xl text-sm max-w-[85%] shadow-sm ${
-                          msg.username === username
-                            ? 'bg-primary text-white rounded-tr-none'
-                            : 'bg-bg-light text-text-main rounded-tl-none border border-[#A89F94]/10'
-                        }`}>
-                          {msg.text}
-                        </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                   <div ref={chatEndRef} />
                 </div>
 
-                <form onSubmit={handleSendMessage} className="mt-3 pt-3 border-t border-[#A89F94]/10 relative">
-                  <input
-                    type="text"
-                    value={inputMessage}
-                    onChange={(e) => setInputMessage(e.target.value)}
-                    placeholder="Type a message..."
-                    className="w-full pl-4 pr-11 py-2.5 bg-bg-light rounded-xl text-sm border-none focus:ring-2 focus:ring-primary/20 transition-all"
-                  />
-                  <button
-                    type="submit"
-                    disabled={!inputMessage.trim()}
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 p-2 text-primary disabled:text-text-muted/30 transition-colors"
-                  >
-                    <Send className="w-4.5 h-4.5" />
-                  </button>
+                {replyTo && (
+                  <div className="flex items-center gap-2 px-3 py-2 bg-[#232e3c] border-t border-white/5">
+                    <div className="w-1 h-8 bg-[#64b5ef] rounded-full" />
+                    <div className="flex-1 min-w-0">
+                      <span className="text-[11px] font-semibold text-[#64b5ef] block">{replyTo.sender}</span>
+                      <span className="text-[11px] text-white/60 truncate block">{replyTo.text.slice(0, 50)}</span>
+                    </div>
+                    <button onClick={cancelReply} className="p-1 text-white/40 hover:text-white transition-colors">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+
+                <form onSubmit={handleSendMessage} className="px-3 py-2 bg-[#17212b] border-t border-white/5">
+                  <div className="relative flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={inputMessage}
+                      onChange={(e) => setInputMessage(e.target.value)}
+                      placeholder={replyTo ? 'Reply...' : 'Type a message...'}
+                      className="flex-1 bg-[#232e3c] border border-white/10 rounded-full px-4 py-2 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-white/20 transition-colors"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!inputMessage.trim()}
+                      className="w-8 h-8 rounded-full bg-[#5288c1] hover:bg-[#4a7ab0] disabled:bg-white/10 disabled:text-white/30 text-white flex items-center justify-center transition-all active:scale-90 flex-shrink-0"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </form>
               </div>
             )}
           </div>
 
-          <div className="p-4 border-t border-[#A89F94]/10 bg-white">
-            <button onClick={() => navigate('/')} className="w-full py-3 bg-bg-light text-text-main text-xs font-bold uppercase tracking-widest rounded-xl hover:bg-slate-100 transition-all border border-[#A89F94]/10 flex items-center justify-center gap-2 active:scale-95">
-              <LogOut className="w-4 h-4" /> Leave Room
-            </button>
-          </div>
-        </aside>
-      </div>
-    </div>
-  );
-}
+           <div className="p-4 border-t border-white/5 bg-[#232e3c]">
+             <button onClick={() => navigate('/')} className="w-full py-3 bg-[#17212b] text-[#f5f5f5] text-xs font-bold uppercase tracking-widest rounded-xl hover:bg-white/5 transition-all border border-white/10 flex items-center justify-center gap-2 active:scale-95">
+               <LogOut className="w-4 h-4" /> Leave Room
+             </button>
+           </div>
+         </aside>
+       </div>
+     </div>
+   );
+ }

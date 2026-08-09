@@ -2,6 +2,25 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --tg-bg: #17212b;
+  --tg-secondary: #232e3c;
+  --tg-text: #f5f5f5;
+  --tg-hint: #708499;
+  --tg-link: #6ab2f2;
+  --tg-button: #5288c1;
+  --tg-button-text: #ffffff;
+  --tg-destructive: #e53935;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --header-bg: rgba(23, 33, 43, 0.97);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
 @layer base {
   html {
     -webkit-tap-highlight-color: transparent;
@@ -9,6 +28,13 @@
   body {
     @apply bg-bg-light text-text-main font-sans antialiased;
     overscroll-behavior: none;
+    font-family: var(--font);
+    background: var(--tg-bg);
+    color: var(--tg-text);
+  }
+
+  * {
+    -webkit-tap-highlight-color: transparent;
   }
 }
 
@@ -25,6 +51,20 @@
   }
   .animate-float {
     animation: float 3s ease-in-out infinite;
+  }
+
+  .line-clamp-1 {
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 }
 

@@ -96,13 +96,17 @@ io.on('connection', (socket) => {
           video: null,
           isPlaying: false,
           currentTime: 0,
-          users: [{ socketId: socket.id, username, role }]
+          users: [{ socketId: socket.id, username, role }],
+          reactions: {}
         };
         rooms.set(roomId, room);
       } else {
         if (room.users.length === 0) {
           role = 'Host';
         }
+
+        // Initialize reactions if missing (for existing rooms)
+        if (!room.reactions) room.reactions = {};
 
         // Check if user is already in the room (e.g., React Strict Mode double mount)
         const existingUserIndex = room.users.findIndex(u => u.socketId === socket.id);
@@ -122,6 +126,8 @@ io.on('connection', (socket) => {
         users: room.users,
         myRole: role
       });
+
+      socket.emit('ALL_REACTIONS', { reactions: room.reactions || {} });
 
       // Broadcast to others that a user joined
       io.to(roomId).emit('user_joined', room.users);
@@ -187,7 +193,7 @@ io.on('connection', (socket) => {
   });
 
   // 4. Chat System
-  socket.on('send_message', ({ roomId, message }) => {
+  socket.on('send_message', ({ roomId, message, replyToId, replyToText, replyToSender }) => {
     try {
       const room = rooms.get(roomId);
       if (!room) return;
@@ -199,11 +205,49 @@ io.on('connection', (socket) => {
         id: Math.random().toString(36).substring(2, 9),
         username: user.username,
         text: message,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        role: user.role
+        timestamp: Date.now() / 1000,
+        role: user.role,
+        socketId: socket.id,
+        replyToId: replyToId || null,
+        replyToText: replyToText || null,
+        replyToSender: replyToSender || null
       };
 
       io.to(roomId).emit('new_message', chatMessage);
+    } catch (err) {
+      console.error(err);
+    }
+  });
+
+  socket.on('send-message-reaction', ({ roomId, messageId, emoji, sender }) => {
+    try {
+      const room = rooms.get(roomId);
+      if (!room) return;
+
+      if (!room.reactions) room.reactions = {};
+      if (!room.reactions[messageId]) room.reactions[messageId] = {};
+
+      const userId = socket.id;
+      if (!room.reactions[messageId][emoji]) {
+        room.reactions[messageId][emoji] = [];
+      }
+
+      const userIndex = room.reactions[messageId][emoji].indexOf(userId);
+      if (userIndex > -1) {
+        room.reactions[messageId][emoji].splice(userIndex, 1);
+        if (room.reactions[messageId][emoji].length === 0) {
+          delete room.reactions[messageId][emoji];
+        }
+      } else {
+        room.reactions[messageId][emoji].push(userId);
+      }
+
+      io.to(roomId).emit('message-reaction-updated', {
+        messageId,
+        emoji,
+        userId,
+        reactions: room.reactions[messageId]
+      });
     } catch (err) {
       console.error(err);
     }
