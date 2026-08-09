@@ -347,6 +347,11 @@ if (TELEGRAM_BOT_TOKEN && TELEGRAM_BOT_TOKEN !== 'YOUR_TELEGRAM_BOT_TOKEN_HERE')
   console.log('ℹ️ TELEGRAM_BOT_TOKEN не настроен — бот не запущен. Укажите TELEGRAM_BOT_TOKEN в .env');
 }
 
+// SPA fallback: serve index.html for all non-API routes
+app.get('*', (req, res) => {
+  res.sendFile(path.join(frontendDist, 'index.html'));
+});
+
 const PORT = process.env.PORT || 5000;
 
 server.listen(PORT, () => {
