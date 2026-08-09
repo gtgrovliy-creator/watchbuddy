@@ -79,7 +79,6 @@ export default function RoomPage() {
   const [reactionPickerMsgId, setReactionPickerMsgId] = useState<string | null>(null);
   const [reactionPickerRect, setReactionPickerRect] = useState<{ top: number; left: number; isMine: boolean } | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressMsgRef = useRef<string | null>(null);
 
